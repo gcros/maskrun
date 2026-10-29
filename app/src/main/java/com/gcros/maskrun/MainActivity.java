@@ -10,168 +10,206 @@ import android.media.ToneGenerator;
 import java.util.*;
 
 public class MainActivity extends Activity {
-    @Override public void onCreate(Bundle state) {
-        super.onCreate(state);
-        getWindow().setStatusBarColor(Color.rgb(10, 12, 26));
-        getWindow().setNavigationBarColor(Color.rgb(10, 12, 26));
+    @Override public void onCreate(Bundle b) {
+        super.onCreate(b);
+        getWindow().setStatusBarColor(Color.rgb(7,10,22));
+        getWindow().setNavigationBarColor(Color.rgb(7,10,22));
         getWindow().getDecorView().setSystemUiVisibility(0);
         setContentView(new GameView(this));
     }
+    @Override public void onBackPressed() {
+        View v = findViewById(android.R.id.content);
+        if (v instanceof GameView) ((GameView)v).back();
+        else super.onBackPressed();
+    }
 
     static class GameView extends View {
-        final Paint p = new Paint(3);
-        final Random random = new Random(4);
-        final ToneGenerator tones = new ToneGenerator(AudioManager.STREAM_MUSIC, 55);
-        final int bg=Color.rgb(9,12,28), wall=Color.rgb(37,42,76), cyan=Color.rgb(42,238,225),
-                  orange=Color.rgb(255,139,62), white=Color.rgb(244,247,255), muted=Color.rgb(137,149,183),
-                  pink=Color.rgb(255,70,135), gold=Color.rgb(255,207,74);
+        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Random rng = new Random();
+        final ToneGenerator sound = new ToneGenerator(AudioManager.STREAM_MUSIC, 65);
+        final int bg=Color.rgb(7,10,22), panel=Color.rgb(17,23,45), wall=Color.rgb(37,49,83),
+            cyan=Color.rgb(43,242,224), orange=Color.rgb(255,142,68), white=Color.rgb(245,248,255),
+            muted=Color.rgb(139,153,186), pink=Color.rgb(255,69,127), gold=Color.rgb(255,211,82);
+        int cols=11, rows=31, level=1, score=0, lives=3, px=1, py=1, coinsTaken=0;
         int[][] map;
-        int rows=13, cols=9, px=1, py=1, score=0, level=1, lives=3;
-        boolean started=false, won=false, dead=false, paused=false;
-        float cell, ox, oy, downX, downY;
-        long lastMove=0;
-        ArrayList<Point> coins = new ArrayList<>();
-        ArrayList<Point> traps = new ArrayList<>();
-
-        GameView(Context c) { super(c); setFocusable(true); makeLevel(); }
+        ArrayList<Point> coins=new ArrayList<>(), traps=new ArrayList<>();
+        boolean started=false, paused=false, dead=false, won=false;
+        float cell, ox, oy, downX, downY, animX, animY, targetX, targetY;
+        long lastAnim=0, invincibleUntil=0;
+        GameView(Context c) { super(c); setLayerType(View.LAYER_TYPE_SOFTWARE,null); setFocusable(true); makeLevel(); }
         void makeLevel() {
             map=new int[rows][cols];
             for(int y=0;y<rows;y++) for(int x=0;x<cols;x++)
                 map[y][x]=(x==0||y==0||x==cols-1||y==rows-1)?1:0;
-            // Deterministic, solvable-ish maze corridors.
-            for(int y=2;y<rows-1;y+=2) for(int x=1;x<cols-1;x++) {
-                if(x!=cols-2 && random.nextFloat()>.24f) map[y][x]=1;
+            // Alternating cross-walls create a readable, solvable vertical run.
+            for(int y=2;y<rows-2;y+=2) {
+                int gap=1+rng.nextInt(cols-2);
+                for(int x=1;x<cols-1;x++) if(x!=gap) map[y][x]=1;
+                if(y+1<rows-1) for(int x=1;x<cols-1;x++) map[y+1][x]=0;
             }
-            // Keep a winding path open from spawn to exit.
-            for(int x=1;x<cols-1;x++) map[1][x]=0;
-            for(int y=1;y<rows-1;y++) map[y][cols-2]=0;
-            for(int x=2;x<cols-2;x++) map[rows-2][x]=0;
-            map[1][1]=0; map[rows-2][cols-2]=2;
-            px=1; py=1; coins.clear(); traps.clear();
-            for(int i=0;i<7+level;i++) {
-                int x=1+random.nextInt(cols-2), y=1+random.nextInt(rows-2);
-                if(map[y][x]==0 && !(x==px&&y==py)) coins.add(new Point(x,y));
+            for(int x=1;x<cols-1;x++) { map[1][x]=0; map[rows-2][x]=0; }
+            px=1; py=1; animX=px; animY=py; coins.clear(); traps.clear(); coinsTaken=0;
+            HashSet<String> used=new HashSet<>();
+            for(int i=0;i<Math.min(7+level,24);i++) {
+                int x=1+rng.nextInt(cols-2), y=2+rng.nextInt(rows-4);
+                if(map[y][x]==0 && !(x==px&&y==py) && used.add(x+","+y)) coins.add(new Point(x,y));
             }
-            for(int i=0;i<Math.min(2+level,7);i++) {
-                int x=1+random.nextInt(cols-2), y=1+random.nextInt(rows-2);
-                if(map[y][x]==0 && !(x==px&&y==py)) traps.add(new Point(x,y));
+            for(int i=0;i<Math.min(2+level/2,8);i++) {
+                int x=1+rng.nextInt(cols-2), y=2+rng.nextInt(rows-4);
+                if(map[y][x]==0 && used.add(x+","+y)) traps.add(new Point(x,y));
             }
-            won=false; dead=false; paused=false; invalidate();
+            map[rows-2][cols-2]=2; won=false; dead=false; paused=false; invalidate();
         }
         @Override protected void onDraw(Canvas c) {
-            super.onDraw(c);
-            c.drawColor(bg);
-            float w=getWidth(), h=getHeight();
-            p.setShader(new LinearGradient(0,0,w,h,Color.rgb(13,18,42),Color.rgb(25,12,39),Shader.TileMode.CLAMP));
+            super.onDraw(c); float w=getWidth(), h=getHeight();
+            p.setShader(new LinearGradient(0,0,w,h,Color.rgb(8,15,35),Color.rgb(29,12,37),Shader.TileMode.CLAMP));
             c.drawRect(0,0,w,h,p); p.setShader(null);
             drawHeader(c,w);
-            float boardTop=h*.19f, boardBottom=h*.76f;
-            cell=Math.min((w-34)/cols,(boardBottom-boardTop)/rows);
-            ox=(w-cell*cols)/2; oy=boardTop+(boardBottom-boardTop-cell*rows)/2;
-            drawBoard(c);
+            float top=h*.155f, bottom=h*.755f;
+            cell=Math.min((w-34)/cols,(bottom-top)/11.3f);
+            ox=(w-cell*cols)/2;
+            float visibleRows=(bottom-top)/cell;
+            float camera=Math.max(0,Math.min(rows-visibleRows,py-visibleRows*.43f));
+            oy=top-camera*cell;
+            drawMaze(c,top,bottom);
             drawControls(c,w,h);
-            if(!started) overlay(c,w,h,"MASKRUN","DESLIZE PARA JOGAR");
-            else if(won) overlay(c,w,h,"FASE CONCLUÍDA!","TOQUE PARA CONTINUAR");
-            else if(dead) overlay(c,w,h,"OPS!","TOQUE PARA TENTAR DE NOVO");
-            else if(paused) overlay(c,w,h,"PAUSADO","TOQUE PARA CONTINUAR");
+            if(!started) overlay(c,w,h,"MASKRUN","TOQUE PARA COMEÇAR","DESLIZE PARA CORRER");
+            else if(won) overlay(c,w,h,"SETOR LIMPO!","VOCÊ SOBREVIVEU","TOQUE PARA PRÓXIMA FASE");
+            else if(dead) overlay(c,w,h,"FIM DE JOGO","AS ARMADILHAS VENCERAM","TOQUE PARA TENTAR NOVAMENTE");
+            else if(paused) overlay(c,w,h,"PAUSADO","RESPIRA. PLANEJA. CORRE.","TOQUE PARA CONTINUAR");
+            if(started&&!paused&&!won&&!dead) postInvalidateDelayed(16);
         }
         void drawHeader(Canvas c,float w) {
-            text(c,"MASK",22,28,cyan,true); text(c,"RUN",22+measure("MASK",22),28,orange,true);
-            text(c,"FASE "+level,w-24,27,white,true,Paint.Align.RIGHT);
-            round(c,16,43,w-16,83,18,Color.rgb(24,29,57));
-            text(c,"PONTOS",28,60,muted,true); text(c,String.valueOf(score),28,76,gold,true);
-            text(c,"♥  "+lives,w-28,68,pink,true,Paint.Align.RIGHT);
+            text(c,"MASKRUN",22,30,white,true,20,Paint.Align.LEFT);
+            text(c,"NEON ESCAPE",23,47,cyan,true,9,Paint.Align.LEFT);
+            round(c,w-116,14,w-18,48,16,panel);
+            text(c,"SETOR "+String.format(Locale.US,"%02d",level),w-67,34,white,true,12,Paint.Align.CENTER);
+            round(c,16,57,w-16,94,13,Color.rgb(16,22,43));
+            text(c,"SCORE",28,73,muted,true,9,Paint.Align.LEFT);
+            text(c,String.format(Locale.US,"%06d",score),28,87,gold,true,15,Paint.Align.LEFT);
+            text(c,"◆ "+coinsTaken,w*.53f,80,gold,true,12,Paint.Align.CENTER);
+            text(c,"♥ "+lives,w-30,80,pink,true,13,Paint.Align.RIGHT);
         }
-        void drawBoard(Canvas c) {
-            round(c,ox-5,oy-5,ox+cell*cols+5,oy+cell*rows+5,18,Color.rgb(21,25,49));
+        void drawMaze(Canvas c,float top,float bottom) {
+            c.save(); c.clipRect(8,top-4,getWidth()-8,bottom+4);
+            round(c,ox-5,oy-5,ox+cell*cols+5,oy+cell*rows+5,16,Color.rgb(13,18,38));
             for(int y=0;y<rows;y++) for(int x=0;x<cols;x++) {
                 float l=ox+x*cell,t=oy+y*cell;
+                if(t>bottom+cell||t+cell<top-cell) continue;
                 if(map[y][x]==1) {
-                    round(c,l+1,t+1,l+cell-1,t+cell-1,5,wall);
+                    round(c,l+1,t+1,l+cell-1,t+cell-1,cell*.18f,wall);
                     p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(1);
-                    p.setColor(Color.rgb(63,73,119)); c.drawRoundRect(l+3,t+3,l+cell-3,t+cell-3,4,4,p); p.setStyle(Paint.Style.FILL);
+                    p.setColor(Color.rgb(57,75,119)); c.drawRoundRect(l+3,t+3,l+cell-3,t+cell-3,cell*.15f,cell*.15f,p); p.setStyle(Paint.Style.FILL);
+                    p.setColor(Color.argb(35,43,242,224)); c.drawLine(l+cell*.2f,t+cell*.2f,l+cell*.8f,t+cell*.2f,p);
                 } else {
-                    p.setColor(Color.rgb(17,21,42)); c.drawRect(l,t,l+cell,t+cell,p);
-                    p.setColor(Color.rgb(27,33,61)); c.drawCircle(l+cell/2,t+cell/2,1.2f,p);
+                    p.setColor(Color.rgb(12,17,35)); c.drawRect(l,t,l+cell,t+cell,p);
+                    p.setColor(Color.rgb(25,34,58)); c.drawCircle(l+cell/2,t+cell/2,1.2f,p);
                 }
             }
             for(Point a:coins) {
                 float x=ox+(a.x+.5f)*cell,y=oy+(a.y+.5f)*cell;
-                p.setColor(Color.argb(70,255,207,74)); c.drawCircle(x,y,cell*.34f,p);
-                p.setColor(gold); c.drawCircle(x,y,cell*.15f,p);
+                if(y<top-cell||y>bottom+cell) continue;
+                p.setColor(Color.argb(45,255,211,82)); c.drawCircle(x,y,cell*.38f,p);
+                p.setColor(gold); c.drawCircle(x,y,cell*.17f,p);
+                p.setColor(white); c.drawCircle(x-cell*.045f,y-cell*.045f,cell*.045f,p);
             }
             for(Point a:traps) {
                 float x=ox+(a.x+.5f)*cell,y=oy+(a.y+.5f)*cell;
-                p.setColor(pink); Path path=new Path(); path.moveTo(x,y-cell*.25f); path.lineTo(x+cell*.22f,y+cell*.2f); path.lineTo(x-cell*.22f,y+cell*.2f); path.close(); c.drawPath(path,p);
+                if(y<top-cell||y>bottom+cell) continue;
+                p.setColor(Color.argb(45,255,69,127)); c.drawCircle(x,y,cell*.37f,p);
+                p.setColor(pink); Path path=new Path(); path.moveTo(x,y-cell*.27f); path.lineTo(x+cell*.25f,y+cell*.21f); path.lineTo(x-cell*.25f,y+cell*.21f); path.close(); c.drawPath(path,p);
             }
-            float ex=ox+(cols-2+.5f)*cell, ey=oy+(rows-2+.5f)*cell;
-            p.setColor(Color.argb(70,42,238,225)); c.drawCircle(ex,ey,cell*.42f,p);
-            p.setColor(cyan); p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(2); c.drawCircle(ex,ey,cell*.25f,p); p.setStyle(Paint.Style.FILL);
-            float x=ox+(px+.5f)*cell,y=oy+(py+.5f)*cell;
-            p.setColor(Color.argb(75,42,238,225)); c.drawCircle(x,y,cell*.44f,p);
-            p.setColor(white); c.drawCircle(x,y,cell*.28f,p);
-            p.setColor(cyan); c.drawCircle(x,y,cell*.19f,p);
-            p.setColor(bg); c.drawCircle(x-cell*.055f,y-cell*.03f,cell*.045f,p); c.drawCircle(x+cell*.055f,y-cell*.03f,cell*.045f,p);
+            float ex=ox+(cols-2+.5f)*cell,ey=oy+(rows-2+.5f)*cell;
+            if(ey>=top-cell&&ey<=bottom+cell) {
+                p.setColor(Color.argb(55,43,242,224)); c.drawCircle(ex,ey,cell*.46f,p);
+                p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(2); p.setColor(cyan); c.drawCircle(ex,ey,cell*.29f,p); p.setStyle(Paint.Style.FILL);
+                text(c,"EXIT",ex,ey+cell*.58f,cyan,true,8,Paint.Align.CENTER);
+            }
+            float now=System.currentTimeMillis();
+            float ease=Math.min(1f,(now-lastAnim)/115f);
+            if(lastAnim==0) ease=1;
+            animX += (targetX-animX)*Math.max(.12f,ease);
+            animY += (targetY-animY)*Math.max(.12f,ease);
+            float x=ox+(animX+.5f)*cell,y=oy+(animY+.5f)*cell;
+            float pulse=(float)(1+Math.sin(now/130.0)*.08);
+            p.setColor(Color.argb(60,43,242,224)); c.drawCircle(x,y,cell*.49f*pulse,p);
+            p.setColor(white); c.drawCircle(x,y,cell*.31f,p);
+            p.setColor(cyan); c.drawCircle(x,y,cell*.23f,p);
+            p.setColor(bg); c.drawCircle(x-cell*.07f,y-cell*.04f,cell*.045f,p); c.drawCircle(x+cell*.07f,y-cell*.04f,cell*.045f,p);
+            c.restore();
         }
         void drawControls(Canvas c,float w,float h) {
-            float cy=h*.86f, r=Math.min(w*.105f,44);
-            button(c,w/2,cy-r*1.08f,r,"↑");
-            button(c,w/2-r*1.15f,cy,r,"←"); button(c,w/2,cy,r,"↓"); button(c,w/2+r*1.15f,cy,r,"→");
-            text(c,"DESLIZE OU USE AS SETAS",w/2,h-18,muted,false,Paint.Align.CENTER);
-            round(c,w-57,95,w-17,132,12,Color.rgb(34,39,72)); text(c,paused?"▶":"Ⅱ",w-37,119,white,true,Paint.Align.CENTER);
+            float cy=h*.855f,r=Math.min(w*.095f,39);
+            control(c,w/2,cy-r*1.03f,r,"↑"); control(c,w/2-r*1.14f,cy,r,"←");
+            control(c,w/2,cy,r,"↓"); control(c,w/2+r*1.14f,cy,r,"→");
+            text(c,"DESLIZE PARA SE MOVER",w/2,h-17,muted,false,9,Paint.Align.CENTER);
+            round(c,w-58,101,w-17,139,12,Color.rgb(27,35,65));
+            text(c,paused?"▶":"Ⅱ",w-37,126,white,true,16,Paint.Align.CENTER);
         }
-        void button(Canvas c,float x,float y,float r,String label) {
-            p.setColor(Color.rgb(31,37,70)); c.drawCircle(x,y,r,p);
-            p.setColor(Color.rgb(64,78,121)); p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(1.5f); c.drawCircle(x,y,r,p); p.setStyle(Paint.Style.FILL);
-            text(c,label,x,y+8,cyan,true,Paint.Align.CENTER);
+        void control(Canvas c,float x,float y,float r,String s) {
+            p.setColor(Color.rgb(24,33,61)); c.drawCircle(x,y,r,p);
+            p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(1.4f); p.setColor(Color.rgb(62,85,126)); c.drawCircle(x,y,r,p); p.setStyle(Paint.Style.FILL);
+            text(c,s,x,y+6,cyan,true,18,Paint.Align.CENTER);
         }
-        void overlay(Canvas c,float w,float h,String title,String sub) {
-            p.setColor(Color.argb(205,7,9,24)); c.drawRect(0,h*.34f,w,h*.62f,p);
-            text(c,title,w/2,h*.445f,white,true,Paint.Align.CENTER,25);
-            text(c,sub,w/2,h*.50f,cyan,true,Paint.Align.CENTER,12);
-            text(c,"MOEDAS • ARMADILHAS • LABIRINTOS",w/2,h*.55f,muted,false,Paint.Align.CENTER,10);
+        void overlay(Canvas c,float w,float h,String title,String subtitle,String hint) {
+            p.setColor(Color.argb(220,5,8,20)); c.drawRect(0,h*.32f,w,h*.62f,p);
+            round(c,18,h*.35f,w-18,h*.59f,22,Color.rgb(17,24,47));
+            p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(1); p.setColor(Color.rgb(42,91,113)); c.drawRoundRect(18,h*.35f,w-18,h*.59f,22,22,p); p.setStyle(Paint.Style.FILL);
+            text(c,title,w/2,h*.425f,white,true,24,Paint.Align.CENTER);
+            text(c,subtitle,w/2,h*.465f,cyan,true,11,Paint.Align.CENTER);
+            text(c,hint,w/2,h*.525f,muted,false,10,Paint.Align.CENTER);
         }
-        void round(Canvas c,float l,float t,float r,float b,float rad,int color) { p.setColor(color); c.drawRoundRect(l,t,r,b,rad,rad,p); }
-        void text(Canvas c,String s,float x,float y,int color,boolean bold) { text(c,s,x,y,color,bold,Paint.Align.LEFT,14); }
-        void text(Canvas c,String s,float x,float y,int color,boolean bold,Paint.Align align) { text(c,s,x,y,color,bold,align,14); }
-        void text(Canvas c,String s,float x,float y,int color,boolean bold,Paint.Align align,float size) {
-            p.setShader(null); p.setColor(color); p.setTextSize(size); p.setTypeface(bold?Typeface.create("sans-serif-condensed",Typeface.BOLD):Typeface.create("sans-serif",Typeface.NORMAL)); p.setTextAlign(align); c.drawText(s,x,y,p); p.setTextAlign(Paint.Align.LEFT);
+        void round(Canvas c,float l,float t,float r,float b,float rad,int color) { p.setShader(null); p.setColor(color); c.drawRoundRect(l,t,r,b,rad,rad,p); }
+        void text(Canvas c,String s,float x,float y,int color,boolean bold,float size,Paint.Align align) {
+            p.setShader(null); p.setColor(color); p.setTextSize(size); p.setTextAlign(align);
+            p.setTypeface(bold?Typeface.create("sans-serif-black",Typeface.BOLD):Typeface.create("sans-serif",Typeface.NORMAL));
+            c.drawText(s,x,y,p);
         }
-        float measure(String s,float size) { p.setTextSize(size); p.setTypeface(Typeface.DEFAULT_BOLD); return p.measureText(s); }
-        boolean blocked(int x,int y) { return x<0||y<0||x>=cols||y>=rows||map[y][x]==1; }
-        void move(int dx,int dy) {
-            if(!started){started=true;invalidate();return;}
-            if(won||dead){if(dead) lives=3; else level++; makeLevel(); started=true; return;}
-            if(paused)return;
-            if(System.currentTimeMillis()-lastMove<85)return; lastMove=System.currentTimeMillis();
-            int x=px,y=py;
-            while(!blocked(x+dx,y+dy)) { x+=dx; y+=dy; }
-            if(x==px&&y==py){tones.startTone(ToneGenerator.TONE_PROP_BEEP,45);return;}
-            px=x;py=y;
-            for(Iterator<Point> it=coins.iterator();it.hasNext();) { Point a=it.next(); if(a.x==px&&a.y==py){score+=10;it.remove();tones.startTone(ToneGenerator.TONE_PROP_ACK,70);} }
-            for(Point a:traps) if(a.x==px&&a.y==py){lives--;tones.startTone(ToneGenerator.TONE_PROP_NACK,150);if(lives<=0)dead=true;else {px=1;py=1;}break;}
-            if(px==cols-2&&py==rows-2){won=true;score+=100;}
-            invalidate();
-        }
+        void back() { if(started&&!paused&&!won&&!dead) paused=true; else {started=false;paused=false;} invalidate(); }
         @Override public boolean onTouchEvent(android.view.MotionEvent e) {
             float x=e.getX(),y=e.getY();
-            if(e.getAction()==MotionEvent.ACTION_DOWN){downX=x;downY=y;return true;}
-            if(e.getAction()==MotionEvent.ACTION_UP){
-                if(!started||won||dead||paused){if(x>getWidth()-75&&y<150&&started&&!won&&!dead){paused=!paused;invalidate();}else move(0,0);return true;}
-                if(x>getWidth()-75&&y<150){paused=!paused;invalidate();return true;}
+            if(e.getAction()==MotionEvent.ACTION_DOWN) { downX=x; downY=y; return true; }
+            if(e.getAction()==MotionEvent.ACTION_UP) {
                 float dx=x-downX,dy=y-downY;
-                if(Math.abs(dx)>24||Math.abs(dy)>24){if(Math.abs(dx)>Math.abs(dy))move(dx>0?1:-1,0);else move(0,dy>0?1:-1);}
-                else {
-                    float w=getWidth(),h=getHeight(),cy=h*.86f,r=Math.min(w*.105f,44);
-                    if(y>cy-r*2.5f&&y<cy-r*.25f&&Math.abs(x-w/2)<r)move(0,-1);
-                    else if(y>cy-r*.8f&&Math.abs(x-w/2)<r)move(0,1);
-                    else if(Math.abs(y-cy)<r&&x<w/2)move(-1,0);
-                    else if(Math.abs(y-cy)<r&&x>w/2)move(1,0);
-                    else if(!started||won||dead||paused) { if(dead)lives=3; else if(won)level++; makeLevel();started=true; }
+                if(!started) { started=true; paused=false; invalidate(); return true; }
+                if(won) { level++; makeLevel(); started=true; invalidate(); return true; }
+                if(dead) { score=0;level=1;lives=3;makeLevel();started=true;invalidate();return true; }
+                if(Math.abs(dx)<18&&Math.abs(dy)<18&&x>getWidth()-75&&y<155) { paused=!paused; invalidate(); return true; }
+                if(paused) { paused=false; invalidate(); return true; }
+                if(Math.max(Math.abs(dx),Math.abs(dy))>18) {
+                    if(Math.abs(dx)>Math.abs(dy)) move(dx>0?1:-1,0); else move(0,dy>0?1:-1);
+                } else {
+                    float w=getWidth(),h=getHeight(),cy=h*.855f,r=Math.min(w*.095f,39);
+                    if(y>h*.75f) {
+                        if(Math.abs(x-w/2)<r*1.8f) move(0,y<cy-r*.45f?-1:1);
+                        else if(x<w/2) move(-1,0); else move(1,0);
+                    }
                 }
                 invalidate(); return true;
             }
             return true;
+        }
+        void move(int dx,int dy) {
+            if(paused||won||dead) return;
+            int x=px,y=py;
+            while(true) {
+                int nx=x+dx,ny=y+dy;
+                if(nx<0||nx>=cols||ny<0||ny>=rows||map[ny][nx]==1) break;
+                x=nx;y=ny;
+                if(map[y][x]==2) break;
+            }
+            if(x==px&&y==py) { sound.startTone(ToneGenerator.TONE_PROP_NACK,45); return; }
+            px=x;py=y; targetX=px;targetY=py; lastAnim=System.currentTimeMillis();
+            for(Iterator<Point> it=coins.iterator();it.hasNext();) {
+                Point a=it.next(); if(a.x==px&&a.y==py) { it.remove();score+=100;coinsTaken++;sound.startTone(ToneGenerator.TONE_PROP_ACK,65); }
+            }
+            for(Iterator<Point> it=traps.iterator();it.hasNext();) {
+                Point a=it.next(); if(a.x==px&&a.y==py) {
+                    it.remove(); if(System.currentTimeMillis()>invincibleUntil) {lives--;invincibleUntil=System.currentTimeMillis()+700; sound.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD,180);}
+                    if(lives<=0) {dead=true;sound.startTone(ToneGenerator.TONE_SUP_ERROR,300);} break;
+                }
+            }
+            if(map[py][px]==2 || (px==cols-2&&py==rows-2)) { won=true;score+=500+coins.size()*20;sound.startTone(ToneGenerator.TONE_PROP_ACK,180); }
         }
     }
 }
