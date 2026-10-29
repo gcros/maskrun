@@ -192,21 +192,33 @@ public class MainActivity extends Activity {
         void move(int dx,int dy) {
             if(paused||won||dead) return;
             int x=px,y=py;
+            ArrayList<Point> path=new ArrayList<>();
             while(true) {
                 int nx=x+dx,ny=y+dy;
                 if(nx<0||nx>=cols||ny<0||ny>=rows||map[ny][nx]==1) break;
-                x=nx;y=ny;
+                x=nx;y=ny; path.add(new Point(x,y));
                 if(map[y][x]==2) break;
+                boolean hitTrap=false;
+                for(Point t:traps) if(t.x==x&&t.y==y) { hitTrap=true; break; }
+                if(hitTrap) break;
             }
-            if(x==px&&y==py) { sound.startTone(ToneGenerator.TONE_PROP_NACK,45); return; }
+            if(path.isEmpty()) { sound.startTone(ToneGenerator.TONE_PROP_NACK,45); return; }
             px=x;py=y; targetX=px;targetY=py; lastAnim=System.currentTimeMillis();
-            for(Iterator<Point> it=coins.iterator();it.hasNext();) {
-                Point a=it.next(); if(a.x==px&&a.y==py) { it.remove();score+=100;coinsTaken++;sound.startTone(ToneGenerator.TONE_PROP_ACK,65); }
-            }
-            for(Iterator<Point> it=traps.iterator();it.hasNext();) {
-                Point a=it.next(); if(a.x==px&&a.y==py) {
-                    it.remove(); if(System.currentTimeMillis()>invincibleUntil) {lives--;invincibleUntil=System.currentTimeMillis()+700; sound.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD,180);}
-                    if(lives<=0) {dead=true;sound.startTone(ToneGenerator.TONE_SUP_ERROR,300);} break;
+            for(Point step:path) {
+                for(Iterator<Point> it=coins.iterator();it.hasNext();) {
+                    Point a=it.next();
+                    if(a.x==step.x&&a.y==step.y) { it.remove();score+=100;coinsTaken++;sound.startTone(ToneGenerator.TONE_PROP_ACK,45); }
+                }
+                for(Iterator<Point> it=traps.iterator();it.hasNext();) {
+                    Point a=it.next();
+                    if(a.x==step.x&&a.y==step.y) {
+                        it.remove();
+                        if(System.currentTimeMillis()>invincibleUntil) {
+                            lives--;invincibleUntil=System.currentTimeMillis()+700;
+                            sound.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD,180);
+                        }
+                        if(lives<=0) {dead=true;sound.startTone(ToneGenerator.TONE_SUP_ERROR,300);}
+                    }
                 }
             }
             if(map[py][px]==2 || (px==cols-2&&py==rows-2)) { won=true;score+=500+coins.size()*20;sound.startTone(ToneGenerator.TONE_PROP_ACK,180); }
